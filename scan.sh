@@ -154,7 +154,7 @@ echo 0 > "$COUNTER_FILE"
         --license "$LICENSE" \
         --images \
         --purge-cache \
-        --workers=8 \
+        --workers=12 \
         --no-banner \
         --verbose \
         --output \
