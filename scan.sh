@@ -60,20 +60,25 @@ echo -ne "\r\e[K"
 echo "Starting security scan..."
 echo ""
 
-# Run malware scan (uses built-in curses progress UI)
+# Run malware scan (with spinner + elapsed timer)
 sudo python3 "$INSTALL_DIR/main.py" malware-scan / \
     --license "$LICENSE" \
     --images \
     --purge-cache \
     --workers=8 \
-    --progress \
+    --no-banner \
+    --quiet \
     --output \
     --output-path "$MALWARE_CSV" \
-    --output-columns filename,signature_description
+    --output-columns filename,signature_description &
+MALWARE_PID=$!
+spin_with_timer "Malware scan" "$MALWARE_PID"
+wait "$MALWARE_PID" || true
 
 # Run vulnerability scan (with spinner + elapsed timer)
 sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
     --license "$LICENSE" \
+    --no-banner \
     --quiet \
     --output \
     --output-path "$VULN_CSV" &
@@ -85,6 +90,7 @@ wait "$VULN_PID" || true
 sudo python3 "$INSTALL_DIR/main.py" db-scan \
     --license "$LICENSE" \
     --locate-sites \
+    --no-banner \
     --quiet \
     --output \
     --output-path "$DBSCAN_CSV" \
@@ -94,12 +100,13 @@ spin_with_timer "Database scan" "$DBSCAN_PID"
 wait "$DBSCAN_PID" || true
 
 # Remediate malware findings
-MALWARE_MATCHES=$(grep -c -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null || echo 0)
+MALWARE_MATCHES=$(grep -c -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null) || MALWARE_MATCHES=0
 if [ "$MALWARE_MATCHES" -gt 0 ]; then
     grep -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null \
         | cut -d',' -f1 \
         | sudo python3 "$INSTALL_DIR/main.py" remediate \
             --read-stdin \
+            --no-banner \
             --quiet \
             --output \
             --output-path "remediation-$DATE.csv" &
@@ -109,8 +116,8 @@ if [ "$MALWARE_MATCHES" -gt 0 ]; then
 fi
 
 # Process results
-VULN_MATCHES=$(grep -c "<=" "$VULN_CSV" 2>/dev/null || echo 0)
-DBSCAN_MATCHES=$(wc -l < "$DBSCAN_CSV" 2>/dev/null || echo 0)
+VULN_MATCHES=$(grep -c "<=" "$VULN_CSV" 2>/dev/null) || VULN_MATCHES=0
+DBSCAN_MATCHES=$(wc -l < "$DBSCAN_CSV" 2>/dev/null) || DBSCAN_MATCHES=0
 DBSCAN_MATCHES=$(( DBSCAN_MATCHES > 1 ? DBSCAN_MATCHES - 1 : 0 ))  # subtract header
 
 echo ""
