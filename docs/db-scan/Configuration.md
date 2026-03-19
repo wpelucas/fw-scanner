@@ -9,7 +9,7 @@ Database scanning can be configured using either command line arguments, the [IN
 - `-u`, `--user`: Database user. Defaults to `root`.
 - `--password`: Provide the database password via the command line. This is insecure and should be avoided in favor of prompting or environment variables.
 - `-p`, `--prompt-for-password`: Prompt for the database password on invocation.
-- `--password-env`: Environment variable containing the database password. Defaults to `fw-scannerCLI_DB_PASSWORD`.
+- `--password-env`: Environment variable containing the database password. Defaults to `WFCLI_DB_PASSWORD`.
 - `-x`, `--prefix`: WordPress database prefix. Defaults to `wp_`.
 - `-D`, `--database-name`: Name of the database to scan.
 - `-C`, `--collation`: Collation to use when connecting to MySQL. Defaults to `utf8mb4_unicode_ci`.

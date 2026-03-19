@@ -53,7 +53,7 @@ config_definitions: ConfigDefinitions = {
         "description": "The environment variable name to check for a password",
         "context": "ALL",
         "argument_type": "OPTION",
-        "default": "fw-scannerCLI_DB_PASSWORD",
+        "default": "WFCLI_DB_PASSWORD",
         "category": "Database Connectivity"
     },
     "prefix": {
