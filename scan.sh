@@ -14,7 +14,46 @@ VULN_CSV="vuln-results-$DATE.csv"
 DBSCAN_CSV="dbscan-results-$DATE.csv"
 FINAL_CSV="scan-results-$DATE.csv"
 
-# Spinner with elapsed time for scans without built-in progress
+# Spinner with real-time progress percentage and ETA
+spin_with_progress() {
+    local label="$1"
+    local pid="$2"
+    local total="$3"
+    local counter_file="$4"
+    local chars='|/-\'
+    local start=$SECONDS
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        local elapsed=$(( SECONDS - start ))
+        local mins=$(( elapsed / 60 ))
+        local secs=$(( elapsed % 60 ))
+        local processed
+        processed=$(cat "$counter_file" 2>/dev/null) || processed=0
+        processed=${processed:-0}
+        if [ "$total" -gt 0 ] && [ "$processed" -gt 100 ] && [ "$elapsed" -gt 3 ]; then
+            local pct=$(( processed * 100 / total ))
+            [ "$pct" -gt 99 ] && pct=99
+            local rate_x10=$(( processed * 10 / elapsed ))
+            if [ "$rate_x10" -gt 0 ]; then
+                local remaining=$(( (total - processed) * 10 / rate_x10 ))
+                local eta_mins=$(( remaining / 60 ))
+                local eta_secs=$(( remaining % 60 ))
+                printf "\r  %s %s [%d%%] [ETA %02d:%02d]   " "${chars:i++%4:1}" "$label" "$pct" "$eta_mins" "$eta_secs"
+            else
+                printf "\r  %s %s [%d%%] [%02d:%02d]   " "${chars:i++%4:1}" "$label" "$pct" "$mins" "$secs"
+            fi
+        else
+            printf "\r  %s %s [%02d:%02d]   " "${chars:i++%4:1}" "$label" "$mins" "$secs"
+        fi
+        sleep 0.5
+    done
+    local elapsed=$(( SECONDS - start ))
+    local mins=$(( elapsed / 60 ))
+    local secs=$(( elapsed % 60 ))
+    printf "\r\e[K  ✓ %s [%02d:%02d]\n" "$label" "$mins" "$secs"
+}
+
+# Spinner with elapsed time (for fast scans)
 spin_with_timer() {
     local label="$1"
     local pid="$2"
@@ -34,11 +73,33 @@ spin_with_timer() {
     printf "\r\e[K  ✓ %s [%02d:%02d]\n" "$label" "$mins" "$secs"
 }
 
+# Show banner
+echo -e "\033[96m"
+cat << 'BANNER'
+
+   █▀▀ █░░ █▄█ █░█░█ █░█ █▀▀ █▀▀ █░░
+   █▀░ █▄▄ ░█░ ▀▄▀▄▀ █▀█ ██▄ ██▄ █▄▄
+
+    S E C U R I T Y   S C A N N E R
+
+BANNER
+echo -e "\033[0m"
+
 # Boot animation
 BOOT_MSG='Booting up security scanner'
 echo -ne "$BOOT_MSG"
 while true; do echo -ne "."; sleep 0.5; done &
 BOOTING_PID=$!
+
+# Count files in parallel with dependency installation (for progress estimation)
+COUNT_TMP=$(mktemp)
+find / -type f \
+    -not -path "/proc/*" \
+    -not -path "/sys/*" \
+    -not -path "/dev/*" \
+    -not -path "/run/*" \
+    2>/dev/null | wc -l > "$COUNT_TMP" &
+COUNT_PID=$!
 
 # Install dependencies and clone/update repo
 sudo apt-get update -qq > /dev/null 2>&1
@@ -54,26 +115,40 @@ fi
 # Install the combined package once
 sudo pip3 install "./$INSTALL_DIR" > /dev/null 2>&1
 
+# Wait for file count to finish
+wait "$COUNT_PID" 2>/dev/null || true
+TOTAL_FILES=$(cat "$COUNT_TMP" 2>/dev/null) || TOTAL_FILES=0
+TOTAL_FILES=${TOTAL_FILES:-0}
+rm -f "$COUNT_TMP"
+
 kill $BOOTING_PID 2>/dev/null || true
 echo -ne "\r\e[K"
 
 echo "Starting security scan..."
 echo ""
 
-# Run malware scan (with spinner + elapsed timer)
-sudo python3 "$INSTALL_DIR/main.py" malware-scan / \
-    --license "$LICENSE" \
-    --images \
-    --purge-cache \
-    --workers=8 \
-    --no-banner \
-    --quiet \
-    --output \
-    --output-path "$MALWARE_CSV" \
-    --output-columns filename,signature_description &
-MALWARE_PID=$!
-spin_with_timer "Malware scan" "$MALWARE_PID"
-wait "$MALWARE_PID" || true
+# Run malware scan with progress tracking via verbose stderr output
+# awk counts "Processing file:" lines and writes count to a temp file every 50 files
+COUNTER_FILE=$(mktemp)
+echo 0 > "$COUNTER_FILE"
+{
+    sudo python3 "$INSTALL_DIR/main.py" malware-scan / \
+        --license "$LICENSE" \
+        --images \
+        --purge-cache \
+        --workers=8 \
+        --no-banner \
+        --verbose \
+        --output \
+        --output-path "$MALWARE_CSV" \
+        --output-columns filename,signature_description \
+        2>&1 >/dev/null | \
+    awk '/Processing file/{c++; if(c%50==0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}} END{if(c>0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}}'
+} &
+MALWARE_BG=$!
+spin_with_progress "Malware scan" "$MALWARE_BG" "$TOTAL_FILES" "$COUNTER_FILE"
+wait "$MALWARE_BG" || true
+rm -f "$COUNTER_FILE"
 
 # Run vulnerability scan (with spinner + elapsed timer)
 sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
@@ -81,7 +156,7 @@ sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
     --no-banner \
     --quiet \
     --output \
-    --output-path "$VULN_CSV" &
+    --output-path "$VULN_CSV" > /dev/null 2>&1 &
 VULN_PID=$!
 spin_with_timer "Vulnerability scan" "$VULN_PID"
 wait "$VULN_PID" || true
@@ -94,7 +169,7 @@ sudo python3 "$INSTALL_DIR/main.py" db-scan \
     --quiet \
     --output \
     --output-path "$DBSCAN_CSV" \
-    --allow-io-errors / &
+    --allow-io-errors / > /dev/null 2>&1 &
 DBSCAN_PID=$!
 spin_with_timer "Database scan" "$DBSCAN_PID"
 wait "$DBSCAN_PID" || true
@@ -109,7 +184,7 @@ if [ "$MALWARE_MATCHES" -gt 0 ]; then
             --no-banner \
             --quiet \
             --output \
-            --output-path "remediation-$DATE.csv" &
+            --output-path "remediation-$DATE.csv" > /dev/null 2>&1 &
     REMED_PID=$!
     spin_with_timer "Remediating malware" "$REMED_PID"
     wait "$REMED_PID" || true
