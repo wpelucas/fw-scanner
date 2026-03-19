@@ -1,13 +1,13 @@
 #!/bin/bash
 # Flywheel Security Scanner
 # Combines malware scanning and vulnerability checking in a single tool.
-# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/WF/main/scan.sh) [LICENSE_KEY]
+# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) [LICENSE_KEY]
 
 set -euo pipefail
 
 LICENSE="${1:-faba755939fba9e467203a1a40cb39702b3c3b2a5643e84c2d7622bf3c577a4cb850cdbd1ab61ffdd4db4d669407e0d21c3e0d71bcf99af895bb0a67fdf87c091494eb12b3fec30fd69563eaeb5a86d1}"
-REPO="https://github.com/wpelucas/WF.git"
-INSTALL_DIR="WF"
+REPO="https://github.com/wpelucas/fw-scanner.git"
+INSTALL_DIR="fw-scanner"
 DATE=$(date +"%m-%d-%Y-%T")
 MALWARE_CSV="malware-results-$DATE.csv"
 VULN_CSV="vuln-results-$DATE.csv"
