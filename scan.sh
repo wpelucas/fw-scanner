@@ -22,7 +22,7 @@ BOOTING_PID=$!
 # Install dependencies and clone/update repo
 sudo apt-get update -qq > /dev/null 2>&1
 sudo apt-get install -qq git python3-pip -y > /dev/null 2>&1
-sudo pip3 install packaging > /dev/null 2>&1
+sudo pip3 install packaging requests pymysql > /dev/null 2>&1
 
 if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR" && git pull > /dev/null 2>&1 && cd ..
