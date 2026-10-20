@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-LICENSE="${1:-faba755939fba9e467203a1a40cb39702b3c3b2a5643e84c2d7622bf3c577a4cb850cdbd1ab61ffdd4db4d669407e0d21c3e0d71bcf99af895bb0a67fdf87c091494eb12b3fec30fd69563eaeb5a86d1}"
+LICENSE="${1:-c940f45ce8cbe106f6ef3d240f384f6db1bef1419843942442ff1b0c041f1d54f2319f7d74e979624720ac5f619377c8427d28e2d7d0c2b377232d491f8a0e2a3478d003c8bceca7d85f0483341f0d2a}"
 REPO="https://github.com/wpelucas/fw-scanner.git"
 INSTALL_DIR="fw-scanner"
 DATE=$(date +"%m-%d-%Y-%T")
