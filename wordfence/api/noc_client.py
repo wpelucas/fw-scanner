@@ -43,9 +43,20 @@ class NocClient:
                 action: str,
                 query: Optional[dict] = None,
                 body: Optional[dict] = None,
-                json: bool = True
+                json: bool = True,
+                raw_query: bool = False
             ):
-        query = self.build_query(action, query)
+        if raw_query:
+            # Send only the action and license key, e.g.
+            # <base_url>?action=<action>&k=<license>
+            exact = {'action': action}
+            if self.license is not None:
+                exact['k'] = self.license.key
+            if query:
+                exact.update(query)
+            query = exact
+        else:
+            query = self.build_query(action, query)
         url = self.base_url + '?' + urlencode(query)
         headers = {
             'User-Agent': get_user_agent()
