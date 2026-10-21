@@ -354,12 +354,12 @@ class Configurer:
             self.license_manager.set_license(self.license)
             if has_existing_config:
                 log.info(
-                        "The configuration for Wordfence CLI has been "
+                        "The configuration for FW Scanner has been "
                         "successfully updated."
                     )
             else:
                 log.info(
-                        "Wordfence CLI has been successfully configured and "
+                        "FW Scanner has been successfully configured and "
                         "is now ready for use."
                     )
             log.info(EMAIL_SIGNUP_MESSAGE)
@@ -385,7 +385,7 @@ class Configurer:
         if not has_legacy_config:
             return False
         should_convert = prompt_yes_no(
-                'A configuration file for an older version of Wordfence CLI '
+                'A configuration file for an older version of FW Scanner '
                 'was detected; would you like to update it now?',
                 default=True
             )
@@ -397,7 +397,7 @@ class Configurer:
     def prompt_for_missing_config(self) -> bool:
         try:
             should_configure = prompt_yes_no(
-                    'Wordfence CLI cannot be used until it has been '
+                    'FW Scanner cannot be used until it has been '
                     'configured. Would you like to configure it now?',
                     default=False
                 )
@@ -411,7 +411,7 @@ class Configurer:
 
     def _handle_prompt_error(self) -> None:
         print(
-                'Wordfence CLI does not appear to be running interactively '
+                'FW Scanner does not appear to be running interactively '
                 'and cannot prompt for configuration. Please run Wordfence '
                 'CLI in a terminal, specify the configuration options using '
                 'the various command line parameters, or set up a '

@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from ..helper import Helper
     from ..subcommands import SubcommandDefinition
 
-NAME = "Wordfence CLI"
-DESCRIPTION = ("Multifunction commandline tool for Wordfence - "
+NAME = "FW Scanner"
+DESCRIPTION = ("Multifunction commandline security scanner - "
                "use wordfence {subcommand} --help for additional"
                " information about subcommands"
                )

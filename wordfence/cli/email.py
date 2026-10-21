@@ -128,7 +128,7 @@ class Mailer(Sender):
     def get_from_address(self) -> str:
         if self.from_address is None:
             address = self.config.email_from
-            display_name = 'Wordfence CLI'
+            display_name = 'FW Scanner'
             if address is None:
                 address = generate_default_from_address(display_name)
             else:

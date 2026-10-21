@@ -1,13 +1,60 @@
 #!/bin/bash
 # Flywheel Security Scanner
 # Combines malware scanning, vulnerability checking, database scanning, and remediation.
-# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) [LICENSE_KEY]
+# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) [--staging] [LICENSE_KEY]
+#
+# Only the production site is scanned unless --staging is passed.
 
 set -euo pipefail
 
-LICENSE="${1:-c940f45ce8cbe106f6ef3d240f384f6db1bef1419843942442ff1b0c041f1d54f2319f7d74e979624720ac5f619377c8427d28e2d7d0c2b377232d491f8a0e2a3478d003c8bceca7d85f0483341f0d2a}"
+DEFAULT_LICENSE="c940f45ce8cbe106f6ef3d240f384f6db1bef1419843942442ff1b0c041f1d54f2319f7d74e979624720ac5f619377c8427d28e2d7d0c2b377232d491f8a0e2a3478d003c8bceca7d85f0483341f0d2a"
+LICENSE=""
+SCAN_STAGING=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --staging)
+            SCAN_STAGING=1
+            ;;
+        -h|--help)
+            echo "Usage: scan.sh [--staging] [LICENSE_KEY]"
+            echo ""
+            echo "  --staging   Also scan the staging site at /staging."
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: scan.sh [--staging] [LICENSE_KEY]" >&2
+            exit 1
+            ;;
+        *)
+            LICENSE="$arg"
+            ;;
+    esac
+done
+
+LICENSE="${LICENSE:-$DEFAULT_LICENSE}"
+
+# The scanners only look at the staging site when --staging is passed through
+STAGING_FLAG=""
+SITE_PATTERNS=( -e "/www" )
+if [ "$SCAN_STAGING" -eq 1 ]; then
+    STAGING_FLAG="--staging"
+    SITE_PATTERNS+=( -e "/staging" )
+fi
+
+# Scale workers with the available CPUs so large sites finish sooner. File
+# scanning is IO bound, so several workers per core keeps them all busy.
+CPU_COUNT=$(nproc 2>/dev/null) || CPU_COUNT=2
+WORKERS=$(( CPU_COUNT * 4 ))
+[ "$WORKERS" -lt 16 ] && WORKERS=16
+[ "$WORKERS" -gt 32 ] && WORKERS=32
+
 REPO="https://github.com/wpelucas/fw-scanner.git"
 INSTALL_DIR="fw-scanner"
+# The malware and vulnerability scans run at the same time, so they each get
+# their own cache directory - the malware scan purges its cache on every run.
+CACHE_BASE="/var/tmp/fw-scanner-cache"
 DATE=$(date +"%m-%d-%Y-%T")
 MALWARE_CSV="malware-results-$DATE.csv"
 VULN_CSV="vuln-results-$DATE.csv"
@@ -55,11 +102,13 @@ spin_with_progress() {
 }
 
 # Spinner with elapsed time (for fast scans)
+# An offset lets a scan that was already running report its true elapsed time
 spin_with_timer() {
     local label="$1"
     local pid="$2"
+    local offset="${3:-0}"
     local chars='|/-\'
-    local start=$SECONDS
+    local start=$(( SECONDS - offset ))
     local i=0
     while kill -0 "$pid" 2>/dev/null; do
         local elapsed=$(( SECONDS - start ))
@@ -111,12 +160,12 @@ BOOTING_PID=$!
 
 # Count files in parallel with dependency installation (for progress estimation)
 COUNT_TMP=$(mktemp)
-find / -type f \
-    -not -path "/proc/*" \
-    -not -path "/sys/*" \
-    -not -path "/dev/*" \
-    -not -path "/run/*" \
-    2>/dev/null | wc -l > "$COUNT_TMP" &
+COUNT_EXCLUDES=( -not -path "/proc/*" -not -path "/sys/*" \
+    -not -path "/dev/*" -not -path "/run/*" )
+if [ "$SCAN_STAGING" -eq 0 ]; then
+    COUNT_EXCLUDES+=( -not -path "/staging/*" )
+fi
+find / -type f "${COUNT_EXCLUDES[@]}" 2>/dev/null | wc -l > "$COUNT_TMP" &
 COUNT_PID=$!
 
 # Install dependencies and clone/update repo
@@ -149,12 +198,15 @@ echo ""
 # awk counts "Processing file:" lines and writes count to a temp file every 50 files
 COUNTER_FILE=$(mktemp)
 echo 0 > "$COUNTER_FILE"
+MALWARE_START=$SECONDS
 {
     sudo python3 "$INSTALL_DIR/main.py" malware-scan / \
         --license "$LICENSE" \
+        $STAGING_FLAG \
         --images \
         --purge-cache \
-        --workers=12 \
+        --workers="$WORKERS" \
+        --cache-directory "$CACHE_BASE/malware" \
         --no-banner \
         --verbose \
         --output \
@@ -164,40 +216,54 @@ echo 0 > "$COUNTER_FILE"
     awk '/Processing file/{c++; if(c%50==0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}} END{if(c>0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}}'
 } &
 MALWARE_BG=$!
-spin_with_progress "Malware scan" "$MALWARE_BG" "$TOTAL_FILES" "$COUNTER_FILE"
-wait "$MALWARE_BG" || true
-rm -f "$COUNTER_FILE"
 
-# Check malware results and show status
-MALWARE_MATCHES=$(grep -c -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null) || MALWARE_MATCHES=0
-if [ "$MALWARE_MATCHES" -gt 0 ]; then
-    print_status "⚠" "\033[0;31m" "Malware scan" "$SPIN_ELAPSED" "$MALWARE_MATCHES malicious file(s) found"
-else
-    print_status "✓" "\033[0;32m" "Malware scan" "$SPIN_ELAPSED" "Clean"
-fi
-
-# Run vulnerability scan (with spinner + elapsed timer)
+# Start the vulnerability scan alongside the malware scan. Its results are
+# held back until the malware results have been reported.
+VULN_START=$SECONDS
 sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
     --license "$LICENSE" \
+    $STAGING_FLAG \
+    --cache-directory "$CACHE_BASE/vuln" \
     --no-banner \
     --quiet \
     --output \
     --output-path "$VULN_CSV" > /dev/null 2>&1 &
 VULN_PID=$!
-spin_with_timer "Vulnerability scan" "$VULN_PID"
+
+spin_with_progress "Malware scan" "$MALWARE_BG" "$TOTAL_FILES" "$COUNTER_FILE"
+wait "$MALWARE_BG" || true
+MALWARE_ELAPSED=$(( SECONDS - MALWARE_START ))
+rm -f "$COUNTER_FILE"
+
+# Check malware results and show status
+MALWARE_MATCHES=$(grep -c "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null) || MALWARE_MATCHES=0
+if [ "$MALWARE_MATCHES" -gt 0 ]; then
+    print_status "⚠" "\033[0;31m" "Malware scan" "$MALWARE_ELAPSED" "$MALWARE_MATCHES malicious file(s) found"
+else
+    print_status "✓" "\033[0;32m" "Malware scan" "$MALWARE_ELAPSED" "Clean"
+fi
+
+# Wait for the vulnerability scan, which has been running all along
+if kill -0 "$VULN_PID" 2>/dev/null; then
+    spin_with_timer "Vulnerability scan" "$VULN_PID" \
+        "$(( SECONDS - VULN_START ))"
+fi
 wait "$VULN_PID" || true
+VULN_ELAPSED=$(( SECONDS - VULN_START ))
 
 # Check vulnerability results and show status
 VULN_MATCHES=$(grep -c "<=" "$VULN_CSV" 2>/dev/null) || VULN_MATCHES=0
 if [ "$VULN_MATCHES" -gt 0 ]; then
-    print_status "⚠" "\033[0;33m" "Vulnerability scan" "$SPIN_ELAPSED" "$VULN_MATCHES vulnerable software found"
+    print_status "⚠" "\033[0;33m" "Vulnerability scan" "$VULN_ELAPSED" "$VULN_MATCHES vulnerable software found"
 else
-    print_status "✓" "\033[0;32m" "Vulnerability scan" "$SPIN_ELAPSED" "Clean"
+    print_status "✓" "\033[0;32m" "Vulnerability scan" "$VULN_ELAPSED" "Clean"
 fi
 
 # Run database scan (with spinner + elapsed timer)
 sudo python3 "$INSTALL_DIR/main.py" db-scan \
     --license "$LICENSE" \
+    $STAGING_FLAG \
+    --cache-directory "$CACHE_BASE/db" \
     --locate-sites \
     --no-banner \
     --quiet \
@@ -223,7 +289,7 @@ REMED_SUCCESS=0
 REMED_FAILED=0
 if [ "$MALWARE_MATCHES" -gt 0 ]; then
     REMED_CSV="remediation-$DATE.csv"
-    grep -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null \
+    grep "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null \
         | cut -d',' -f1 \
         | sudo python3 "$INSTALL_DIR/main.py" remediate \
             --read-stdin \
@@ -259,7 +325,7 @@ echo ""
 # Display malware scan details
 if [ "$MALWARE_MATCHES" -gt 0 ]; then
     echo -e "\033[1;31m── Malware Findings ($MALWARE_MATCHES) ──\033[0m"
-    grep -e "/www" -e "/staging" "$MALWARE_CSV" 2>/dev/null | while IFS=',' read -r file desc rest; do
+    grep "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null | while IFS=',' read -r file desc rest; do
         # Determine remediation status for this file
         remed_icon="  \033[0;31m✗\033[0m"
         remed_note=""

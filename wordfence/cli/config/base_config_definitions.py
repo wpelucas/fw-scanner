@@ -19,12 +19,20 @@ config_definitions = {
         }
     },
     "banner": {
-        "description": "Display the Wordfence banner in command output when "
+        "description": "Display the FW Scanner banner in command output when "
                        "running in a TTY/terminal.",
         "context": "ALL",
         "argument_type": "FLAG",
         "default": True,
         "category": "Output Control"
+    },
+    "staging": {
+        "description": "Include the Flywheel staging site at /staging in "
+                       "the scan. Only the production site is scanned by "
+                       "default.",
+        "context": "ALL",
+        "argument_type": "FLAG",
+        "default": False
     },
     "license": {
         "short_name": "l",
@@ -195,7 +203,7 @@ config_definitions = {
         "category": "Caching"
     },
     "version": {
-        "description": "Display the version of Wordfence CLI.",
+        "description": "Display the version of FW Scanner.",
         "context": "CLI",
         "argument_type": "FLAG",
         "default": False

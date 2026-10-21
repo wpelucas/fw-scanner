@@ -16,6 +16,7 @@ These arguments apply to all subcommands.
 **General Options:**
 
 - `-c`, `--configuration`: Path to a configuration INI file to use. (default: `~/.config/wordfence/wordfence-cli.ini`)
+- `--staging`: Include the Flywheel staging site at `/staging` in the scan. Only the production site is scanned by default.
 - `-l`, `--license`: Specify the license to use.
 - `--version`: Display the version of Wordfence CLI.
 - `-h`, `--help`: Display help information.

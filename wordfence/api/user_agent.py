@@ -1,5 +1,5 @@
-from ..version import __version__
+USER_AGENT = 'FW Scanner'
 
 
 def get_user_agent():
-    return f"Wordfence-CLI/{__version__}"
+    return USER_AGENT

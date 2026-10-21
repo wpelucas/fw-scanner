@@ -8,7 +8,8 @@ from ..php.parsing import parse_php_file, PhpException, PhpState, \
     PhpEvaluationOptions
 from ..logging import log
 from ..util.io import is_symlink_loop, PathSet, resolve_path, \
-    resolve_parent_path
+    resolve_parent_path, is_staging_path, get_site_paths, PRODUCTION_PATH, \
+    STAGING_PATH
 from .exceptions import WordpressException, ExtensionException
 from .plugin import Plugin, PluginLoader
 from .theme import Theme, ThemeLoader
@@ -22,18 +23,13 @@ EXPECTED_CORE_FILES = {
         WP_BLOG_HEADER_NAME
     }
 EXPECTED_CORE_DIRECTORIES = {
-        b'/www',
-        b'/staging'
+        PRODUCTION_PATH,
+        STAGING_PATH
     }
 
 EVALUATION_OPTIONS = PhpEvaluationOptions(
         allow_includes=False
     )
-
-ALTERNATE_RELATIVE_CONTENT_PATHS = [
-        b'/www',
-        b'/staging'
-    ]
 
 DATABASE_CONFIG_CONSTANTS = {
         b'DB_NAME': 'name',
@@ -49,6 +45,10 @@ class WordpressStructureOptions:
     relative_content_paths: List[str] = field(default_factory=list)
     relative_plugins_paths: List[str] = field(default_factory=list)
     relative_mu_plugins_paths: List[str] = field(default_factory=list)
+    include_staging: bool = False
+
+    def get_alternate_content_paths(self) -> List[bytes]:
+        return get_site_paths(self.include_staging)
 
 
 class PathResolver:
@@ -69,11 +69,13 @@ class WordpressLocator(PathResolver):
                 self,
                 path: bytes,
                 allow_nested: bool = True,
-                allow_io_errors: bool = False
+                allow_io_errors: bool = False,
+                include_staging: bool = False
             ):
         super().__init__(path)
         self.allow_nested = allow_nested
         self.allow_io_errors = allow_io_errors
+        self.include_staging = include_staging
 
     def _is_core_directory(self, path: bytes, quiet: bool = False) -> bool:
         # On Flywheel hosting, always treat directories as valid WP cores
@@ -104,6 +106,14 @@ class WordpressLocator(PathResolver):
                     uid = file.stat().st_uid
                     owner = pwd.getpwuid(uid).pw_name
                     if file.is_dir() and owner not in ('root', 'nobody'):
+                        if not self.include_staging and \
+                                is_staging_path(file.path):
+                            log.info(
+                                    'Skipping staging site at '
+                                    + os.fsdecode(file.path)
+                                    + ' (use --staging to include it)'
+                                )
+                            continue
                         if file.is_symlink() and \
                                 is_symlink_loop(file.path, processed):
                             continue
@@ -221,20 +231,22 @@ class WordpressSite(PathResolver):
                 structure_options: Optional[WordpressStructureOptions] = None,
                 core_path: bytes = None,
                 is_child_path: bool = False,
-                allow_io_errors: bool = False
+                allow_io_errors: bool = False,
+                include_staging: bool = False
             ):
         super().__init__(path)
         self.core_path = b''
         if structure_options is not None:
             self.structure_options = structure_options
         else:
-            self.structure_options = WordpressStructureOptions()
-            www_path = b'/www'
-            staging_path = b'/staging'
-            self.structure_options.relative_content_paths.append(www_path)
-            if os.path.isdir(staging_path):
-                self.structure_options.relative_content_paths.append(
-                        staging_path)
+            self.structure_options = WordpressStructureOptions(
+                    include_staging=include_staging
+                )
+            for site_path in self.structure_options \
+                    .get_alternate_content_paths():
+                if os.path.isdir(site_path):
+                    self.structure_options.relative_content_paths.append(
+                            site_path)
         self._version = None
 
     def resolve_core_path(self, path: bytes) -> bytes:
@@ -319,7 +331,7 @@ class WordpressSite(PathResolver):
             yield configured
         for path in self.structure_options.relative_content_paths:
             yield self.resolve_core_path(os.path.join(path, b'wp-content'))
-        for path in ALTERNATE_RELATIVE_CONTENT_PATHS:
+        for path in self.structure_options.get_alternate_content_paths():
             yield self.resolve_core_path(os.path.join(path, b'wp-content'))
 
     def _locate_content_directory(self) -> List[bytes]:

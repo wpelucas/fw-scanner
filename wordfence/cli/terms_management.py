@@ -99,9 +99,9 @@ class TermsManager:
             )
         except InputException:
             print(
-                    'Wordfence CLI does not appear to be running interactively'
+                    'FW Scanner does not appear to be running interactively'
                     ' and cannot prompt for agreement to the license terms. '
-                    'Please run Wordfence CLI in a terminal or use the '
+                    'Please run FW Scanner in a terminal or use the '
                     '--accept-terms command line option instead.'
                 )
         if terms_accepted:
@@ -109,7 +109,7 @@ class TermsManager:
         else:
             print(
                     'You must accept the terms in order to continue using'
-                    ' Wordfence CLI.'
+                    ' FW Scanner.'
                 )
             sys.exit(1)
 

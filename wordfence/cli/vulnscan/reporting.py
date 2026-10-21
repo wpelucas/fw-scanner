@@ -208,7 +208,7 @@ class VulnScanReport(Report):
         unique_count = self.scanner.get_vulnerability_count()
         total_count = self.scanner.get_total_count()
 
-        base_message = 'Vulnerabilities were found by Wordfence CLI during ' \
+        base_message = 'Vulnerabilities were found by FW Scanner during ' \
                        'a scan.'
 
         plain = f'{base_message}\n\n' \

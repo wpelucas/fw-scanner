@@ -17,7 +17,7 @@ from .matching import MatchEngine, MatchEngineOptions, Matcher, MatchWorkspace
 from .filtering import FileFilter, filter_any
 from ..util import timing
 from ..util.io import StreamReader, is_symlink_loop, is_symlink_and_loop, \
-    get_all_parents, PathSet
+    get_all_parents, PathSet, get_site_paths, resolve_staging_paths
 from ..util.direct_io import DirectIoBuffer, DirectIoReader
 from ..util.units import scale_byte_unit
 from ..logging import log, remove_initial_handler, VERBOSE
@@ -163,6 +163,7 @@ class Options:
     scanned_content_limit: Optional[int] = None
     file_filter: Optional[FileFilter] = None
     allow_io_errors: bool = False
+    include_staging: bool = False
     debug: bool = False
     logging_initializer: Callable[[], None] = None
     match_engine: MatchEngine = MatchEngine.get_default()
@@ -186,7 +187,8 @@ class FileLocator:
                 queue: Queue,
                 file_filter: FileFilter,
                 allow_io_errors: bool = False,
-                scanned_paths: Optional[PathSet] = None
+                scanned_paths: Optional[PathSet] = None,
+                include_staging: bool = False
             ):
         self.path = path
         self.queue = queue
@@ -194,6 +196,10 @@ class FileLocator:
         self.allow_io_errors = allow_io_errors
         self.scanned_paths = scanned_paths if scanned_paths is not None \
             else PathSet()
+        self.include_staging = include_staging
+        self.site_paths = get_site_paths(include_staging)
+        self.excluded_paths = set() if include_staging \
+            else resolve_staging_paths()
         self.located_count = 0
         self.skipped_count = 0
 
@@ -220,8 +226,11 @@ class FileLocator:
                 ) from error
 
     def _is_exempt_path(self, path: bytes) -> bool:
-        """Check if path is /www or /staging (Flywheel hosting dirs)."""
-        return path in [b'/www', b'/staging']
+        """Check if path is a Flywheel site directory (/www, /staging)."""
+        return path in self.site_paths
+
+    def _is_excluded_staging_path(self, path: bytes) -> bool:
+        return path in self.excluded_paths
 
     def _is_root_or_nobody_owned(self, path: bytes) -> bool:
         """Check if a path is owned by root or nobody."""
@@ -265,6 +274,13 @@ class FileLocator:
                     if not is_exempt and self._is_loop(item.path, parents):
                         continue
                 if item.is_dir():
+                    if self._is_excluded_staging_path(item_path):
+                        log.info(
+                                'Skipping staging site at '
+                                + os.fsdecode(item_path)
+                                + ' (use --staging to include it)'
+                            )
+                        continue
                     self.scanned_paths.add(item_path)
                     try:
                         yield from self.search_directory(
@@ -316,7 +332,8 @@ class FileLocatorProcess(Process):
                 event_queue: Optional[Queue] = None,
                 allow_io_errors: bool = False,
                 logging_initializer: Callable[[], None] = None,
-                profile: bool = False
+                profile: bool = False,
+                include_staging: bool = False
             ):
         self._input_queue = Queue(input_queue_size)
         self.output_queue = Queue(output_queue_size)
@@ -330,6 +347,7 @@ class FileLocatorProcess(Process):
         self.allow_io_errors = allow_io_errors
         self._logging_initializer = logging_initializer
         self.profile = profile
+        self.include_staging = include_staging
         self._path_count = 0
         self._skipped_count = Value('i', 0)
         super().__init__(name='file-locator')
@@ -384,7 +402,8 @@ class FileLocatorProcess(Process):
                         file_filter=self.file_filter,
                         queue=self.output_queue,
                         allow_io_errors=self.allow_io_errors,
-                        scanned_paths=scanned_paths
+                        scanned_paths=scanned_paths,
+                        include_staging=self.include_staging
                     )
                 locator.locate()
                 skipped_count += locator.skipped_count
@@ -1006,7 +1025,8 @@ class Scanner:
                     ) else None,
                 allow_io_errors=self.options.allow_io_errors,
                 logging_initializer=self.options.logging_initializer,
-                profile=profiler is not None
+                profile=profiler is not None,
+                include_staging=self.options.include_staging
             )
         file_locator_process.start()
         self.active.append(file_locator_process)

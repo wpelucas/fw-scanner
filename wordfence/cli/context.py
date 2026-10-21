@@ -175,7 +175,7 @@ class CliContext:
             name_suffix = ''
         else:
             name_suffix = f' "{__version_name__}"'
-        print(f"Wordfence CLI {__version__}{name_suffix}")
+        print(f"FW Scanner {__version__}{name_suffix}")
         has_pcre = self.has_pcre()
         pcre_support_text = yes_no(has_pcre)
         if has_pcre:

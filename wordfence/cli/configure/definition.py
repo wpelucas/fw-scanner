@@ -45,11 +45,11 @@ cacheable_types = set()
 
 examples = [
     UsageExample(
-        'Interactively configure Wordfence CLI',
+        'Interactively configure FW Scanner',
         'wordfence configure'
     ),
     UsageExample(
-        'Non-interactively configure Wordfence CLI to use 4 worker processes '
+        'Non-interactively configure FW Scanner to use 4 worker processes '
         'and the default values for all other options, automatically '
         'accepting the terms and requesting a free license',
         'wordfence configure --default --workers 4 --accept-terms'
@@ -59,7 +59,7 @@ examples = [
 definition = SubcommandDefinition(
     name='configure',
     usage='',
-    description='Configure Wordfence CLI',
+    description='Configure FW Scanner',
     config_definitions=config_definitions,
     config_section='DEFAULT',
     cacheable_types=cacheable_types,

@@ -225,7 +225,8 @@ class VulnScanSubcommand(Subcommand):
         locator = WordpressLocator(
                 path=path,
                 allow_nested=self.config.allow_nested,
-                allow_io_errors=self.config.allow_io_errors
+                allow_io_errors=self.config.allow_io_errors,
+                include_staging=self.config.staging
             )
         site_found = False
         for core_path in locator.locate_core_paths():
@@ -294,7 +295,8 @@ class VulnScanSubcommand(Subcommand):
         structure_options = WordpressStructureOptions(
                 relative_content_paths=self.config.relative_content_path,
                 relative_plugins_paths=self.config.relative_plugins_path,
-                relative_mu_plugins_paths=self.config.relative_mu_plugins_path
+                relative_mu_plugins_paths=self.config.relative_mu_plugins_path,
+                include_staging=self.config.staging
             )
         with report_manager.open_output_file() as output_file:
             report = report_manager.initialize_report(output_file)
