@@ -280,6 +280,10 @@ class VulnScanSubcommand(Subcommand):
                     'other options.'
                 )
         vulnerability_index = self._load_vulnerability_index(feed_variant)
+        log.info(
+                f'Loaded {len(vulnerability_index.vulnerabilities)} '
+                f'known vulnerabilities from the {feed_variant.path} feed'
+            )
         vulnerability_filter = self._initialize_filter(feed_variant)
         for invalid_id in vulnerability_filter.get_invalid_ids(
                     vulnerability_index

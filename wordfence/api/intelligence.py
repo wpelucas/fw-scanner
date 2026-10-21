@@ -292,7 +292,17 @@ class Client:
                 vulnerabilities[key] = (variant.parser.parse(record))
             return vulnerabilities
         except RequestException as e:
-            raise ApiException('Wordfence Intelligence API request failed') \
+            # Surface the status and body: a feed failure is usually a rate
+            # limit (429) or a removed API version (410), and the bare
+            # message gives no way to tell them apart.
+            detail = None
+            response = getattr(e, 'response', None)
+            if response is not None:
+                detail = f'HTTP {response.status_code}: {response.text[:200]}'
+            raise ApiException(
+                        'Wordfence Intelligence API request failed',
+                        detail
+                    ) \
                 from e
         except ValidationException as e:
             raise ApiException(

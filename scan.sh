@@ -1,30 +1,38 @@
 #!/bin/bash
 # Flywheel Security Scanner
 # Combines malware scanning, vulnerability checking, database scanning, and remediation.
-# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) [--staging] [LICENSE_KEY]
+# Usage: bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) [--staging] [--debug] [LICENSE_KEY]
 #
 # Only the production site is scanned unless --staging is passed.
+# --debug streams full scanner output and keeps the intermediate files.
 
 set -euo pipefail
 
 DEFAULT_LICENSE="c940f45ce8cbe106f6ef3d240f384f6db1bef1419843942442ff1b0c041f1d54f2319f7d74e979624720ac5f619377c8427d28e2d7d0c2b377232d491f8a0e2a3478d003c8bceca7d85f0483341f0d2a"
 LICENSE=""
 SCAN_STAGING=0
+DEBUG=0
 
 for arg in "$@"; do
     case "$arg" in
         --staging)
             SCAN_STAGING=1
             ;;
+        --debug)
+            DEBUG=1
+            ;;
         -h|--help)
-            echo "Usage: scan.sh [--staging] [LICENSE_KEY]"
+            echo "Usage: scan.sh [--staging] [--debug] [LICENSE_KEY]"
             echo ""
             echo "  --staging   Also scan the staging site at /staging."
+            echo "  --debug     Show verbose scanner output and errors, run"
+            echo "              the scans one at a time, and keep the"
+            echo "              intermediate CSVs and the checkout."
             exit 0
             ;;
         -*)
             echo "Unknown option: $arg" >&2
-            echo "Usage: scan.sh [--staging] [LICENSE_KEY]" >&2
+            echo "Usage: scan.sh [--staging] [--debug] [LICENSE_KEY]" >&2
             exit 1
             ;;
         *)
@@ -41,6 +49,15 @@ SITE_PATTERNS=( -e "/www" )
 if [ "$SCAN_STAGING" -eq 1 ]; then
     STAGING_FLAG="--staging"
     SITE_PATTERNS+=( -e "/staging" )
+fi
+
+# In debug mode the scanners log verbosely and nothing is suppressed, so
+# --quiet is dropped and the spinners are replaced by streamed output.
+DEBUG_ARGS=""
+QUIET_FLAG="--quiet"
+if [ "$DEBUG" -eq 1 ]; then
+    DEBUG_ARGS="--debug --verbose"
+    QUIET_FLAG=""
 fi
 
 # Scale workers with the available CPUs so large sites finish sooner. File
@@ -60,9 +77,6 @@ MALWARE_CSV="malware-results-$DATE.csv"
 VULN_CSV="vuln-results-$DATE.csv"
 DBSCAN_CSV="dbscan-results-$DATE.csv"
 FINAL_CSV="scan-results-$DATE.csv"
-
-# Elapsed time tracking for spinners
-SPIN_ELAPSED=0
 
 # Spinner with real-time progress percentage and ETA
 spin_with_progress() {
@@ -97,7 +111,6 @@ spin_with_progress() {
         fi
         sleep 0.5
     done
-    SPIN_ELAPSED=$(( SECONDS - start ))
     printf "\r\e[K"
 }
 
@@ -117,7 +130,6 @@ spin_with_timer() {
         printf "\r  %s %s [%02d:%02d]" "${chars:i++%4:1}" "$label" "$mins" "$secs"
         sleep 0.25
     done
-    SPIN_ELAPSED=$(( SECONDS - start ))
     printf "\r\e[K"
 }
 
@@ -131,6 +143,32 @@ print_status() {
         printf "  %b%s%b %s [%02d:%02d] %b%s%b\n" "$color" "$icon" "\033[0m" "$label" "$mins" "$secs" "\033[0;38;5;7m" "$detail" "\033[0m"
     else
         printf "  %b%s%b %s [%02d:%02d]\n" "$color" "$icon" "\033[0m" "$label" "$mins" "$secs"
+    fi
+}
+
+# In debug mode the scanner output is streamed instead of hidden; indenting
+# it keeps it distinguishable from the script's own status lines.
+run_scan() {
+    if [ "$DEBUG" -eq 1 ]; then
+        "$@" 2>&1 | sed 's/^/    /'
+    else
+        "$@" > /dev/null 2>&1
+    fi
+}
+
+# Report a scan the way the current mode calls for: a spinner normally, a
+# plain "running" line in debug mode where the output is streamed
+debug_step() {
+    printf "  \033[0;38;5;7m>\033[0m %s...\n" "$1"
+}
+
+# Debug mode keeps the per-scan CSVs so they can be inspected
+keep_or_remove_intermediates() {
+    if [ "$DEBUG" -eq 1 ]; then
+        echo -e "\033[0;38;5;7mDebug mode - kept $MALWARE_CSV," \
+            "$VULN_CSV, $DBSCAN_CSV\033[0m"
+    else
+        sudo rm -f "$MALWARE_CSV" "$VULN_CSV" "$DBSCAN_CSV"
     fi
 }
 
@@ -152,11 +190,20 @@ cat << 'BANNER'
 BANNER
 echo -e "\033[0m"
 
-# Boot animation
-BOOT_MSG='Booting up security scanner'
-echo -ne "$BOOT_MSG"
-while true; do echo -ne "."; sleep 0.5; done &
-BOOTING_PID=$!
+# Boot animation. In debug mode the setup output is streamed instead, so the
+# animation would only interleave with it.
+BOOTING_PID=""
+if [ "$DEBUG" -eq 1 ]; then
+    echo "Debug mode: staging=$SCAN_STAGING workers=$WORKERS"
+    echo "  cache: $CACHE_BASE   results: $(pwd)"
+    echo ""
+    debug_step "Installing dependencies"
+else
+    BOOT_MSG='Booting up security scanner'
+    echo -ne "$BOOT_MSG"
+    while true; do echo -ne "."; sleep 0.5; done &
+    BOOTING_PID=$!
+fi
 
 # Count files in parallel with dependency installation (for progress estimation)
 COUNT_TMP=$(mktemp)
@@ -169,18 +216,26 @@ find / -type f "${COUNT_EXCLUDES[@]}" 2>/dev/null | wc -l > "$COUNT_TMP" &
 COUNT_PID=$!
 
 # Install dependencies and clone/update repo
-sudo apt-get update -qq > /dev/null 2>&1
-sudo apt-get install -qq git python3-pip -y > /dev/null 2>&1
-sudo pip3 install packaging requests pymysql > /dev/null 2>&1
+run_setup() {
+    if [ "$DEBUG" -eq 1 ]; then
+        "$@" 2>&1 | sed 's/^/    /'
+    else
+        "$@" > /dev/null 2>&1
+    fi
+}
+
+run_setup sudo apt-get update -qq
+run_setup sudo apt-get install -qq git python3-pip -y
+run_setup sudo pip3 install packaging requests pymysql
 
 if [ -d "$INSTALL_DIR" ]; then
-    cd "$INSTALL_DIR" && git pull > /dev/null 2>&1 && cd ..
+    cd "$INSTALL_DIR" && run_setup git pull && cd ..
 else
-    git clone "$REPO" > /dev/null 2>&1
+    run_setup git clone "$REPO"
 fi
 
 # Install the combined package once
-sudo pip3 install "./$INSTALL_DIR" > /dev/null 2>&1
+run_setup sudo pip3 install "./$INSTALL_DIR"
 
 # Wait for file count to finish
 wait "$COUNT_PID" 2>/dev/null || true
@@ -188,21 +243,19 @@ TOTAL_FILES=$(cat "$COUNT_TMP" 2>/dev/null) || TOTAL_FILES=0
 TOTAL_FILES=${TOTAL_FILES:-0}
 rm -f "$COUNT_TMP"
 
-kill $BOOTING_PID 2>/dev/null || true
-echo -ne "\r\e[K"
+if [ -n "$BOOTING_PID" ]; then
+    kill "$BOOTING_PID" 2>/dev/null || true
+    echo -ne "\r\e[K"
+fi
 
 echo "Starting security scan..."
 echo ""
 
-# Run malware scan with progress tracking via verbose stderr output
-# awk counts "Processing file:" lines and writes count to a temp file every 50 files
-COUNTER_FILE=$(mktemp)
-echo 0 > "$COUNTER_FILE"
-MALWARE_START=$SECONDS
-{
+malware_scan() {
     sudo python3 "$INSTALL_DIR/main.py" malware-scan / \
         --license "$LICENSE" \
         $STAGING_FLAG \
+        $DEBUG_ARGS \
         --images \
         --purge-cache \
         --workers="$WORKERS" \
@@ -211,29 +264,52 @@ MALWARE_START=$SECONDS
         --verbose \
         --output \
         --output-path "$MALWARE_CSV" \
-        --output-columns filename,signature_description \
-        2>&1 >/dev/null | \
-    awk '/Processing file/{c++; if(c%50==0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}} END{if(c>0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}}'
-} &
-MALWARE_BG=$!
+        --output-columns filename,signature_description
+}
 
-# Start the vulnerability scan alongside the malware scan. Its results are
-# held back until the malware results have been reported.
-VULN_START=$SECONDS
-sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
-    --license "$LICENSE" \
-    $STAGING_FLAG \
-    --cache-directory "$CACHE_BASE/vuln" \
-    --no-banner \
-    --quiet \
-    --output \
-    --output-path "$VULN_CSV" > /dev/null 2>&1 &
-VULN_PID=$!
+vuln_scan() {
+    sudo python3 "$INSTALL_DIR/main.py" vuln-scan / \
+        --license "$LICENSE" \
+        $STAGING_FLAG \
+        $DEBUG_ARGS \
+        $QUIET_FLAG \
+        --cache-directory "$CACHE_BASE/vuln" \
+        --no-banner \
+        --output \
+        --output-path "$VULN_CSV"
+}
 
-spin_with_progress "Malware scan" "$MALWARE_BG" "$TOTAL_FILES" "$COUNTER_FILE"
-wait "$MALWARE_BG" || true
-MALWARE_ELAPSED=$(( SECONDS - MALWARE_START ))
-rm -f "$COUNTER_FILE"
+# Debug mode runs the scans one at a time with their output streamed, so
+# that logs and errors stay readable and attributable to a single scan.
+if [ "$DEBUG" -eq 1 ]; then
+    debug_step "Malware scan"
+    MALWARE_START=$SECONDS
+    run_scan malware_scan || true
+    MALWARE_ELAPSED=$(( SECONDS - MALWARE_START ))
+else
+    # awk counts "Processing file:" lines and writes the count to a temp
+    # file every 50 files, which drives the progress percentage and ETA
+    COUNTER_FILE=$(mktemp)
+    echo 0 > "$COUNTER_FILE"
+    MALWARE_START=$SECONDS
+    {
+        malware_scan 2>&1 >/dev/null | \
+        awk '/Processing file/{c++; if(c%50==0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}} END{if(c>0){printf "%d\n", c > "'"$COUNTER_FILE"'"; close("'"$COUNTER_FILE"'")}}'
+    } &
+    MALWARE_BG=$!
+
+    # Start the vulnerability scan alongside the malware scan. Its results
+    # are held back until the malware results have been reported.
+    VULN_START=$SECONDS
+    vuln_scan > /dev/null 2>&1 &
+    VULN_PID=$!
+
+    spin_with_progress "Malware scan" "$MALWARE_BG" "$TOTAL_FILES" \
+        "$COUNTER_FILE"
+    wait "$MALWARE_BG" || true
+    MALWARE_ELAPSED=$(( SECONDS - MALWARE_START ))
+    rm -f "$COUNTER_FILE"
+fi
 
 # Check malware results and show status
 MALWARE_MATCHES=$(grep -c "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null) || MALWARE_MATCHES=0
@@ -243,12 +319,19 @@ else
     print_status "✓" "\033[0;32m" "Malware scan" "$MALWARE_ELAPSED" "Clean"
 fi
 
-# Wait for the vulnerability scan, which has been running all along
-if kill -0 "$VULN_PID" 2>/dev/null; then
-    spin_with_timer "Vulnerability scan" "$VULN_PID" \
-        "$(( SECONDS - VULN_START ))"
+# Run or wait for the vulnerability scan
+if [ "$DEBUG" -eq 1 ]; then
+    debug_step "Vulnerability scan"
+    VULN_START=$SECONDS
+    run_scan vuln_scan || true
+else
+    # It has been running alongside the malware scan all along
+    if kill -0 "$VULN_PID" 2>/dev/null; then
+        spin_with_timer "Vulnerability scan" "$VULN_PID" \
+            "$(( SECONDS - VULN_START ))"
+    fi
+    wait "$VULN_PID" || true
 fi
-wait "$VULN_PID" || true
 VULN_ELAPSED=$(( SECONDS - VULN_START ))
 
 # Check vulnerability results and show status
@@ -259,28 +342,39 @@ else
     print_status "✓" "\033[0;32m" "Vulnerability scan" "$VULN_ELAPSED" "Clean"
 fi
 
-# Run database scan (with spinner + elapsed timer)
-sudo python3 "$INSTALL_DIR/main.py" db-scan \
-    --license "$LICENSE" \
-    $STAGING_FLAG \
-    --cache-directory "$CACHE_BASE/db" \
-    --locate-sites \
-    --no-banner \
-    --quiet \
-    --output \
-    --output-path "$DBSCAN_CSV" \
-    --allow-io-errors / > /dev/null 2>&1 &
-DBSCAN_PID=$!
-spin_with_timer "Database scan" "$DBSCAN_PID"
-wait "$DBSCAN_PID" || true
+db_scan() {
+    sudo python3 "$INSTALL_DIR/main.py" db-scan \
+        --license "$LICENSE" \
+        $STAGING_FLAG \
+        $DEBUG_ARGS \
+        $QUIET_FLAG \
+        --cache-directory "$CACHE_BASE/db" \
+        --locate-sites \
+        --no-banner \
+        --output \
+        --output-path "$DBSCAN_CSV" \
+        --allow-io-errors /
+}
+
+DBSCAN_START=$SECONDS
+if [ "$DEBUG" -eq 1 ]; then
+    debug_step "Database scan"
+    run_scan db_scan || true
+else
+    db_scan > /dev/null 2>&1 &
+    DBSCAN_PID=$!
+    spin_with_timer "Database scan" "$DBSCAN_PID"
+    wait "$DBSCAN_PID" || true
+fi
+DBSCAN_ELAPSED=$(( SECONDS - DBSCAN_START ))
 
 # Check database results and show status
 DBSCAN_MATCHES=$(wc -l < "$DBSCAN_CSV" 2>/dev/null) || DBSCAN_MATCHES=0
 DBSCAN_MATCHES=$(( DBSCAN_MATCHES > 1 ? DBSCAN_MATCHES - 1 : 0 ))  # subtract header
 if [ "$DBSCAN_MATCHES" -gt 0 ]; then
-    print_status "⚠" "\033[0;33m" "Database scan" "$SPIN_ELAPSED" "$DBSCAN_MATCHES finding(s)"
+    print_status "⚠" "\033[0;33m" "Database scan" "$DBSCAN_ELAPSED" "$DBSCAN_MATCHES finding(s)"
 else
-    print_status "✓" "\033[0;32m" "Database scan" "$SPIN_ELAPSED" "Clean"
+    print_status "✓" "\033[0;32m" "Database scan" "$DBSCAN_ELAPSED" "Clean"
 fi
 
 # Remediate malware findings
@@ -289,18 +383,30 @@ REMED_SUCCESS=0
 REMED_FAILED=0
 if [ "$MALWARE_MATCHES" -gt 0 ]; then
     REMED_CSV="remediation-$DATE.csv"
-    grep "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null \
-        | cut -d',' -f1 \
-        | sudo python3 "$INSTALL_DIR/main.py" remediate \
-            --read-stdin \
-            --no-banner \
-            --output \
-            --output-headers \
-            --output-path "$REMED_CSV" \
-            --output-columns path,status,type > /dev/null 2>&1 &
-    REMED_PID=$!
-    spin_with_timer "Remediating malware" "$REMED_PID"
-    wait "$REMED_PID" || true
+    remediate_malware() {
+        grep "${SITE_PATTERNS[@]}" "$MALWARE_CSV" 2>/dev/null \
+            | cut -d',' -f1 \
+            | sudo python3 "$INSTALL_DIR/main.py" remediate \
+                --read-stdin \
+                $DEBUG_ARGS \
+                --no-banner \
+                --output \
+                --output-headers \
+                --output-path "$REMED_CSV" \
+                --output-columns path,status,type
+    }
+
+    REMED_START=$SECONDS
+    if [ "$DEBUG" -eq 1 ]; then
+        debug_step "Remediating malware"
+        run_scan remediate_malware || true
+    else
+        remediate_malware > /dev/null 2>&1 &
+        REMED_PID=$!
+        spin_with_timer "Remediating malware" "$REMED_PID"
+        wait "$REMED_PID" || true
+    fi
+    REMED_ELAPSED=$(( SECONDS - REMED_START ))
 
     # Parse remediation results
     if [ -f "$REMED_CSV" ]; then
@@ -310,13 +416,13 @@ if [ "$MALWARE_MATCHES" -gt 0 ]; then
     fi
 
     if [ "$REMED_SUCCESS" -gt 0 ] && [ "$REMED_FAILED" -eq 0 ]; then
-        print_status "✓" "\033[0;32m" "Remediation" "$SPIN_ELAPSED" "$REMED_SUCCESS/$REMED_TOTAL file(s) remediated"
+        print_status "✓" "\033[0;32m" "Remediation" "$REMED_ELAPSED" "$REMED_SUCCESS/$REMED_TOTAL file(s) remediated"
     elif [ "$REMED_SUCCESS" -gt 0 ] && [ "$REMED_FAILED" -gt 0 ]; then
-        print_status "⚠" "\033[0;33m" "Remediation" "$SPIN_ELAPSED" "$REMED_SUCCESS/$REMED_TOTAL remediated, $REMED_FAILED could not be remediated"
+        print_status "⚠" "\033[0;33m" "Remediation" "$REMED_ELAPSED" "$REMED_SUCCESS/$REMED_TOTAL remediated, $REMED_FAILED could not be remediated"
     elif [ "$REMED_TOTAL" -gt 0 ]; then
-        print_status "✗" "\033[0;31m" "Remediation" "$SPIN_ELAPSED" "$REMED_FAILED file(s) could not be remediated (not from a known theme/plugin)"
+        print_status "✗" "\033[0;31m" "Remediation" "$REMED_ELAPSED" "$REMED_FAILED file(s) could not be remediated (not from a known theme/plugin)"
     else
-        print_status "✗" "\033[0;31m" "Remediation" "$SPIN_ELAPSED" "No files could be remediated"
+        print_status "✗" "\033[0;31m" "Remediation" "$REMED_ELAPSED" "No files could be remediated"
     fi
 fi
 
@@ -374,11 +480,15 @@ if [ "$MALWARE_MATCHES" -gt 0 ] || [ "$VULN_MATCHES" -gt 0 ] || [ "$DBSCAN_MATCH
     echo -e "Security scan completed \033[0;38;5;7m- Report saved in $FINAL_CSV\033[0m"
     [ -f "${REMED_CSV:-}" ] && echo -e "Remediation report \033[0;38;5;7m- saved in $REMED_CSV\033[0m"
     echo ""
-    sudo rm -f "$MALWARE_CSV" "$VULN_CSV" "$DBSCAN_CSV"
+    keep_or_remove_intermediates
 else
     echo -e "Security scan completed \033[0;38;5;7m- No report saved, site appears clean\033[0m\n"
-    sudo rm -f "$MALWARE_CSV" "$VULN_CSV" "$DBSCAN_CSV"
+    keep_or_remove_intermediates
 fi
 
-# Cleanup
-sudo rm -rf "$INSTALL_DIR" > /dev/null 2>&1
+# Cleanup. Debug mode keeps the checkout so the scans can be re-run by hand.
+if [ "$DEBUG" -eq 1 ]; then
+    echo -e "\033[0;38;5;7mDebug mode - kept checkout in ./$INSTALL_DIR\033[0m"
+else
+    sudo rm -rf "$INSTALL_DIR" > /dev/null 2>&1
+fi

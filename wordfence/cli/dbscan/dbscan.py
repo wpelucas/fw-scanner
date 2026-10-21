@@ -205,6 +205,7 @@ class DbScanSubcommand(Subcommand):
             for rules_file in self.config.rules_file:
                 load_database_rules(rules_file, rule_set)
         self._filter_rules(rule_set)
+        log.info(f'Loaded {len(rule_set.rules)} database rule(s)')
         return rule_set
 
     def invoke(self) -> int:

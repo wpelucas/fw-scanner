@@ -93,9 +93,7 @@ class Client(NocClient):
         return bool(response['ok'])
 
     def get_patterns(self) -> dict:
-        # Fetch as <base_url>?action=get_patterns&k=<license> with no
-        # extra CLI parameters (cli, s)
-        patterns = self.request('get_patterns', raw_query=True)
+        patterns = self.request('get_patterns')
         validator = DictionaryValidator({
             'badstrings': ListValidator(str),
             'commonStrings': ListValidator(str),

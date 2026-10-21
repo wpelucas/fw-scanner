@@ -321,8 +321,8 @@ def generate_report_email_html(
     header.append(
             Tag('h1', {'class': 'logo'})
             .append(RawHtml(
-                '<span class="cli-green">Word</span>fence '
-                '<span class="cli">CLI</span>'))
+                '<span class="cli-green">FW</span> '
+                '<span class="cli">Scanner</span>'))
         )
     header.append(
             Tag('h2')

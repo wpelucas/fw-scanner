@@ -11,6 +11,14 @@ Only the production site is scanned by default. To scan `/staging` as well:
 bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) --staging
 ```
 
+## Debugging a scan
+Streams the full scanner output (verbose logging, API errors, tracebacks),
+runs the scans one at a time so the logs stay readable, and keeps the
+per-scan CSVs and the checkout:
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) --debug
+```
+
 ## With a custom license key
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/wpelucas/fw-scanner/main/scan.sh) YOUR_LICENSE_KEY
